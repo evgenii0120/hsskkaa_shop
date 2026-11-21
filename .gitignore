@@ -1,0 +1,17 @@
+.env
+.env.*.local
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+bot.log*
+shop.db
+*.sqlite
+*.sqlite3
+*.dump
+*.backup
+*.pdf
+playwright/.cache/

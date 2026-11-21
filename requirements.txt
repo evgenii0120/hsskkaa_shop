@@ -1,0 +1,11 @@
+aiogram>=3.13,<4
+python-dotenv>=1.0,<2
+SQLAlchemy>=2.0,<2.1
+asyncpg>=0.29,<1
+pypdf>=5.0,<6
+reportlab>=4.0,<5
+aiosmtplib>=3.0,<5
+yookassa>=3.0,<4
+aiohttp>=3.9,<4
+playwright>=1.48,<2
+pytest>=8,<10
