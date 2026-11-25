@@ -57,6 +57,7 @@ YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
 YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "").strip()
 YOOKASSA_SEND_RECEIPT = _bool("YOOKASSA_SEND_RECEIPT", "true")
+RECEIPT_EMAIL_COPY = _bool("RECEIPT_EMAIL_COPY", "true")
 YOOKASSA_VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))
 _tax = os.getenv("YOOKASSA_TAX_SYSTEM_CODE", "").strip()
 YOOKASSA_TAX_SYSTEM_CODE = int(_tax) if _tax.isdigit() else None

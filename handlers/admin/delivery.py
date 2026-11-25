@@ -1,14 +1,15 @@
 from html import escape
 
-from aiogram import F, Router
+from aiogram import F
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import DeliveryAttempt, DeliveryTask, Order, PaymentAttempt, Product, User
+from db.models import DeliveryAttempt, DeliveryTask, Order, PaymentAttempt, PaymentReceipt, Product, User
 from handlers.admin.common import admin_router
 from handlers.common import edit_or_answer
 from services.delivery import force_retry_task
+from services.receipt_delivery import queue_receipt_email
 
 router = admin_router()
 
@@ -21,6 +22,18 @@ def _status(value: str) -> str:
         "creation_failed": "ошибка создания", "succeeded": "оплачено",
         "canceled": "отменено", "reconciliation_required": "сверка нужна",
     }.get(value, value)
+
+
+_RECEIPT_STATUS = {
+    "waiting": "ожидает проверки", "pending": "в обработке", "registered": "зарегистрирован",
+    "canceled": "регистрация отменена", "not_found": "не найден",
+    "details_unavailable": "реквизиты пока недоступны", "api_error": "ошибка API", "test": "тестовый платёж",
+    "mismatch": "платёж не совпадает с заказом", "not_applicable": "чек отсутствует у отменённого платежа",
+}
+_RECEIPT_EMAIL_STATUS = {
+    "queued": "в очереди", "sending": "отправляется", "accepted": "принято SMTP",
+    "blocked": "отправка недоступна", "failed": "ошибка отправки", "unknown": "результат неизвестен",
+}
 
 
 async def _dashboard(cb: CallbackQuery, session: AsyncSession) -> None:
@@ -85,6 +98,13 @@ async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> Non
         f"Сумма: {order.amount} RUB",
         "", "<b>Попытки оплаты:</b>",
     ]
+    rows = []
+    tracking = {
+        item.attempt_id: item
+        for item in (await session.scalars(select(PaymentReceipt).where(
+            PaymentReceipt.attempt_id.in_([p.id for p in payments])
+        ))).all()
+    }
     for p in payments:
         lines.append(
             f"#{p.id}: {_status(p.status)} · {p.amount} {p.currency} · "
@@ -92,8 +112,19 @@ async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> Non
         )
         if p.last_error:
             lines.append(f"  Ошибка: {escape(p.last_error[:250])}")
+        receipt = tracking.get(p.id)
+        if receipt is not None:
+            fiscal = _RECEIPT_STATUS.get(receipt.status, receipt.status)
+            mail = _RECEIPT_EMAIL_STATUS.get(receipt.email_status, "нет отправки ботом")
+            provider = f" · API: {escape(receipt.registration_status)}" if receipt.registration_status else ""
+            lines.append(f"  Чек: {escape(fiscal)}{provider} · письмо: {mail}")
+            if receipt.email_error:
+                lines.append(f"  {escape(receipt.email_error)}")
+        if p.payment_id:
+            rows.append([InlineKeyboardButton(
+                text=f"✉️ Повторить отправку чека · #{p.id}", callback_data=f"adm:receipt:{p.id}"
+            )])
     lines.append("\n<b>Каналы доставки:</b>")
-    rows = []
     for task in tasks:
         lines.append(f"{task.channel}: <b>{_status(task.status)}</b> · попыток {task.attempts}")
         if task.last_error:
@@ -112,6 +143,7 @@ async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> Non
             rows.append([InlineKeyboardButton(
                 text=f"🔁 Повторить {task.channel}", callback_data=f"adm:retry:{task.id}"
             )])
+    rows.append([InlineKeyboardButton(text="Обновить", callback_data=f"adm:dl:{order_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ К списку заказов", callback_data="adm:delivery")])
     await edit_or_answer(cb, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows))
     await cb.answer()
@@ -129,3 +161,34 @@ async def retry_delivery(cb: CallbackQuery) -> None:
         "Задание возвращено в очередь" if ok else "Повтор невозможен: проверьте оплату и статус задания",
         show_alert=True,
     )
+
+
+@router.callback_query(F.data.regexp(r"^adm:receipt:[0-9]+$"))
+async def confirm_receipt_resend(cb: CallbackQuery, session: AsyncSession) -> None:
+    attempt_id = int(cb.data.rsplit(":", 1)[1])
+    attempt = await session.get(PaymentAttempt, attempt_id)
+    if not attempt or not attempt.payment_id:
+        await cb.answer("У попытки нет ID платежа ЮKassa.", show_alert=True)
+        return
+    await edit_or_answer(
+        cb,
+        f"Отправить покупателю фискальные реквизиты чека по заказу #{attempt.order_id}, "
+        f"попытка оплаты #{attempt_id}? Бот сначала проверит чек в ЮKassa.",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отправить", callback_data=f"adm:receipt-send:{attempt_id}")],
+            [InlineKeyboardButton(text="⬅️ К заказу", callback_data=f"adm:dl:{attempt.order_id}")],
+        ]),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.regexp(r"^adm:receipt-send:[0-9]+$"))
+async def resend_receipt(cb: CallbackQuery, session: AsyncSession) -> None:
+    attempt_id = int(cb.data.rsplit(":", 1)[1])
+    result = await queue_receipt_email(attempt_id)
+    attempt = await session.get(PaymentAttempt, attempt_id)
+    if attempt:
+        await edit_or_answer(cb, result, InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⬅️ К заказу", callback_data=f"adm:dl:{attempt.order_id}")
+        ]]))
+    await cb.answer(result if not attempt else None, show_alert=not bool(attempt))

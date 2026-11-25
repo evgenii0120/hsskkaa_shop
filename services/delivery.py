@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from config import (
     ADMIN_IDS, DEBUG_ADMIN_IDS, DELIVERY_LEASE_SECONDS,
-    DELIVERY_MAX_BACKOFF_HOURS, DELIVERY_POLL_SECONDS, YOOKASSA_SEND_RECEIPT,
+    DELIVERY_MAX_BACKOFF_HOURS, DELIVERY_POLL_SECONDS,
 )
 from services.payment_rules import delivery_retry_delay
 from db.base import SessionMaker
@@ -202,10 +202,8 @@ async def _send_channel(bot: Bot, claim: ClaimedTask) -> tuple[str, str | None, 
         response = await send_email(
             email=data["email"], subject=f"Ваш заказ #{claim.order_id}: {data['title']}",
             text=(f"Здравствуйте, {data['fio']}!\n\nСпасибо за покупку «{data['title']}».\n"
-                  f"Ваш PDF находится во вложении.\nКод экземпляра: {data['secret_code']}\n"
-                  + ("Фискальный чек по оплате направляется платёжным сервисом отдельным письмом.\n\n"
-                  + "Данное сообщение создано автоматически, отвечать на него не нужно."
-                     if YOOKASSA_SEND_RECEIPT else "")),
+                  f"Ваш PDF находится во вложении.\nКод экземпляра: {data['secret_code']}\n\n"
+                  "Данное сообщение создано автоматически, отвечать на него не нужно."),
             attachment=pdf, message_id=message_id, order_id=claim.order_id,
         )
         return "accepted", message_id, {"smtp_response": response[:500]}

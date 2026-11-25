@@ -14,6 +14,7 @@ from db.models import Order, PaymentAttempt
 from services.delivery import enqueue_delivery
 from services import yookassa_service as yk
 from services.payment_rules import validate_payment_attempt
+from services.receipt_delivery import track_paid_attempt
 
 YOOKASSA_NETWORKS = [ip_network(n) for n in (
     "185.71.76.0/27", "185.71.77.0/27", "77.75.153.0/25",
@@ -107,8 +108,11 @@ async def _apply_payment(bot: Bot, payment) -> None:
                         PaymentAttempt.id != attempt.id,
                     ).limit(1)
                 )).scalar_one_or_none()
+                first_confirmation = attempt.status != "succeeded"
                 attempt.status = "succeeded"
-                attempt.paid_at = datetime.now(timezone.utc)
+                if attempt.paid_at is None:
+                    attempt.paid_at = datetime.now(timezone.utc)
+                await track_paid_attempt(session, attempt.id, auto_email=first_confirmation)
                 attempt.last_checked_at = datetime.now(timezone.utc)
                 attempt.last_error = None
                 order.status = "succeeded"

@@ -90,6 +90,17 @@ async def send_email(
             "message", "Вложение отсутствует или не похоже на PDF", permanent=True
         )
 
+    message = _message(email, subject, text, message_id, order_id)
+    message.add_attachment(
+        attachment,
+        maintype="application",
+        subtype="pdf",
+        filename=f"order_{order_id}.pdf",
+    )
+    return await _send_message(message, order_id)
+
+
+def _message(email: str, subject: str, text: str, message_id: str, order_id: int) -> EmailMessage:
     message = EmailMessage()
     message["From"] = SMTP_FROM
     message["To"] = email
@@ -98,13 +109,20 @@ async def send_email(
     message["Message-ID"] = message_id
     message["X-Order-ID"] = str(order_id)
     message.set_content(text)
-    message.add_attachment(
-        attachment,
-        maintype="application",
-        subtype="pdf",
-        filename=f"order_{order_id}.pdf",
-    )
+    return message
 
+
+async def send_receipt_email(
+    *, email: str, text: str, message_id: str, order_id: int,
+) -> str:
+    config_error = smtp_config_error()
+    if config_error:
+        raise SMTPDeliveryError("configuration", config_error, permanent=True)
+    message = _message(email, f"Реквизиты кассового чека по заказу №{order_id}", text, message_id, order_id)
+    return await _send_message(message, order_id)
+
+
+async def _send_message(message: EmailMessage, order_id: int) -> str:
     tls_mode = "implicit_tls" if SMTP_USE_TLS else "starttls" if SMTP_START_TLS else "plain"
     smtp = SMTP(
         hostname=SMTP_HOST,
@@ -154,8 +172,8 @@ async def send_email(
 
         logger.info("SMTP authentication succeeded order_id=%s", order_id)
         logger.info(
-            "SMTP message transfer starting order_id=%s attachment_bytes=%s",
-            order_id, len(attachment),
+            "SMTP message transfer starting order_id=%s message_id=%s",
+            order_id, message["Message-ID"],
         )
         try:
             refused_map, _server_response = await smtp.send_message(message)
@@ -193,7 +211,7 @@ async def send_email(
             )
 
         accepted = True
-        logger.info("SMTP server accepted message order_id=%s message_id=%s", order_id, message_id)
+        logger.info("SMTP server accepted message order_id=%s message_id=%s", order_id, message["Message-ID"])
         return "SMTP server accepted message"
     finally:
         # A QUIT failure after DATA was accepted must not turn a successful send

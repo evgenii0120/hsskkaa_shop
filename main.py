@@ -19,6 +19,8 @@ from middlewares.db import DbSessionMiddleware
 from services.debug import TelegramLogHandler
 from services.delivery import delivery_worker
 from services.document_monitor import monitor_documents
+from services.receipt_delivery import receipt_worker
+from services.yookassa_service import is_configured as yookassa_is_configured
 from webhook_server import start_payment_watcher, start_webhook_server
 
 
@@ -78,6 +80,8 @@ async def _run_bot() -> None:
 
     webhook_runner = await start_webhook_server(bot)
     payment_task = start_payment_watcher(bot)
+    receipt_task = (asyncio.create_task(receipt_worker(), name="receipt-worker")
+                    if yookassa_is_configured() else None)
     workers = [
         asyncio.create_task(delivery_worker(bot, f"delivery-{i + 1}"), name=f"delivery-worker-{i + 1}")
         for i in range(DELIVERY_WORKER_COUNT)
@@ -90,6 +94,7 @@ async def _run_bot() -> None:
             reload_task,
             monitor_task,
             payment_task,
+            receipt_task,
             *workers,
         ]:
             if task:
@@ -101,6 +106,7 @@ async def _run_bot() -> None:
                     reload_task,
                     monitor_task,
                     payment_task,
+                    receipt_task,
                     *workers,
                 ]
                 if task

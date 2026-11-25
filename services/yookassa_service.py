@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
-from yookassa import Configuration, Payment
+from yookassa import Configuration, Payment, Receipt
 
 from config import (
     YOOKASSA_RETURN_URL, YOOKASSA_SECRET_KEY, YOOKASSA_SEND_RECEIPT,
@@ -102,3 +102,17 @@ async def list_payments(created_from: datetime, created_to: datetime, limit: int
         if not cursor:
             return collected
     raise RuntimeError("YooKassa payment list exceeded 100 pages; reconciliation is incomplete")
+
+
+async def list_payment_receipts(payment_id: str):
+    if not is_configured():
+        raise RuntimeError("ЮKassa не настроена")
+    params = {"payment_id": payment_id, "limit": 100}
+    receipts = []
+    for _ in range(100):
+        page = await asyncio.to_thread(Receipt.list, params)
+        receipts.extend(page.items or [])
+        if not page.next_cursor:
+            return receipts
+        params = {**params, "cursor": page.next_cursor}
+    raise RuntimeError("Не удалось получить полный список чеков ЮKassa")
