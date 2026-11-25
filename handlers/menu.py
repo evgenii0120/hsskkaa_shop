@@ -17,7 +17,6 @@ from handlers.common import edit_or_answer
 
 router = Router()
 
-# /start 1  или  /start product_1
 _DEEP_LINK = re.compile(r"^(?:product_)?(\d+)$")
 
 

@@ -34,7 +34,6 @@ def _back() -> Kb:
     return Kb(inline_keyboard=[[Btn(text="⬅️ Назад", callback_data="dbg:panel")]])
 
 
-# ── Глобальный перехват ошибок хендлеров ─────────────────────────────────
 @router.errors()
 async def on_error(event: ErrorEvent, bot: Bot) -> bool:
     exc = event.exception
@@ -50,7 +49,6 @@ async def on_error(event: ErrorEvent, bot: Bot) -> bool:
     tb = "".join(traceback.format_exception(exc))
     await debug.report(bot, f"{type(exc).__name__} · {ctx}", tb)
 
-    # вежливо сообщаем пользователю
     try:
         if upd.callback_query:
             await upd.callback_query.answer("⚠️ Произошла ошибка. Попробуйте позже.", show_alert=True)
@@ -61,7 +59,6 @@ async def on_error(event: ErrorEvent, bot: Bot) -> bool:
     return True
 
 
-# ── Панель (только DEBUG_ADMIN_ID) ───────────────────────────────────────
 @router.message(Command("debug"), _only_debug_admin)
 async def cmd_debug(message: Message) -> None:
     await message.answer(_PANEL, reply_markup=_kb())

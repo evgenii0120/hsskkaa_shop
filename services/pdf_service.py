@@ -52,7 +52,6 @@ def add_watermark(pdf_file: io.BytesIO, fio: str, email: str, secret_code: str) 
         if pdfmetrics.stringWidth(watermark, font_name, 6.2) <= max_width:
             pdf.drawCentredString(width / 2, 10, watermark)
         else:
-            # Split long personal data into two readable lines.
             pdf.drawCentredString(width / 2, 17, f"Экземпляр: {fio} | ID: {secret_code}")
             pdf.drawCentredString(width / 2, 8, f"Email: {email}")
         pdf.restoreState()

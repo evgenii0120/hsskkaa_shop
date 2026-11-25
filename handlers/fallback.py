@@ -14,7 +14,6 @@ async def fallback_message(message: Message) -> None:
 
 @router.callback_query()
 async def fallback_callback(cb: CallbackQuery) -> None:
-    # Кнопки админки/тикетов нажал не админ (старое сообщение, пересланная кнопка)
     if (cb.data or "").startswith(("adm:", "tk:")):
         await cb.answer(texts.ADMIN_DENIED, show_alert=True)
         return

@@ -23,6 +23,6 @@ async def pay_start(cb: CallbackQuery, state: FSMContext, session: AsyncSession)
     if not user.is_registered:
         await start_registration(cb, state, f"pay:{product.id}")
         return
-    await cb.answer()  # создание платежа — сетевой вызов, гасим «часики» сразу
+    await cb.answer()
     text, markup = await prepare_checkout(session, user, product, cb.bot)
     await edit_or_answer(cb, text, markup)

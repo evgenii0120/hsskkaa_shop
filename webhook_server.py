@@ -1,4 +1,3 @@
-"""YooKassa webhook endpoint and payment reconciliation watcher."""
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
@@ -29,7 +28,6 @@ def _client_ip(request: web.Request) -> str | None:
             return real.strip()
         forwarded = request.headers.get("X-Forwarded-For")
         if forwarded:
-            # Trust only the rightmost value appended by the configured proxy.
             return forwarded.split(",")[-1].strip()
     return request.remote
 
@@ -87,7 +85,6 @@ async def _apply_payment(bot: Bot, payment) -> None:
     notification = None
     async with SessionMaker() as session:
         async with session.begin():
-            # Lock order first, then PaymentAttempt. Checkout uses the same lock order.
             metadata_order_id = yk.payment_metadata(payment).get("order_id")
             if not str(metadata_order_id or "").isdigit():
                 raise ValueError("Payment metadata.order_id is missing or invalid")
@@ -114,7 +111,7 @@ async def _apply_payment(bot: Bot, payment) -> None:
                 attempt.paid_at = datetime.now(timezone.utc)
                 attempt.last_checked_at = datetime.now(timezone.utc)
                 attempt.last_error = None
-                order.status = "succeeded"  # legacy compatibility; not delivery truth
+                order.status = "succeeded"
                 await enqueue_delivery(session, order.id)
                 if previous_success:
                     attempt.last_error = "POSSIBLE_OVERPAYMENT: another payment attempt for this order is already succeeded"
@@ -173,11 +170,6 @@ async def yookassa_webhook(request: web.Request) -> web.Response:
 
 
 async def _reconcile_missing_payment_ids(bot: Bot) -> None:
-    """Recover a lost Payment.create response by matching exact YooKassa metadata.
-
-    If list reconciliation is unavailable or ambiguous, the attempt remains blocked
-    from creating a new payment; no fresh idempotency key is generated automatically.
-    """
     now = datetime.now(timezone.utc)
     async with SessionMaker() as session:
         attempts = (await session.execute(
@@ -239,7 +231,6 @@ async def _reconcile_missing_payment_ids(bot: Bot) -> None:
                 if payment.status == "pending":
                     attempt.status = "pending"
                 elif payment.status == "succeeded" and payment.paid:
-                    # Apply after transaction; webhook/reconcile handler revalidates all fields.
                     attempt.status = "creation_unknown"
                 elif payment.status == "canceled":
                     attempt.status = "canceled"

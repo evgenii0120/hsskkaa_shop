@@ -7,7 +7,6 @@ def as_utc(value: datetime) -> datetime:
 
 
 def can_retry_idempotent_create(created_at: datetime, now: datetime, safe_hours: int = 23) -> bool:
-    """Use the same request/key only inside a conservative window below YooKassa's 24h retention."""
     return as_utc(now) - as_utc(created_at) < timedelta(hours=safe_hours)
 
 

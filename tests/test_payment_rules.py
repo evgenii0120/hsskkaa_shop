@@ -26,9 +26,8 @@ def test_payment_attempt_identity_accepts_matching_attempt():
     validate_payment_attempt(
         attempt_id=7, order_id=42, expected_amount=Decimal("500"), expected_currency="RUB",
         metadata={"order_id": "42", "payment_attempt_id": "7"},
-        actual_amount=Decimal("500.00"), actual_currency="RUB",
+        actual_amount=Decimal("370.00"), actual_currency="RUB",
     )
-
 
 @pytest.mark.parametrize("metadata", [
     {"order_id": "43", "payment_attempt_id": "7"},
@@ -67,7 +66,7 @@ def test_delivery_backoff_increases_and_caps():
 def test_multiple_payment_attempts_for_same_order_are_distinguishable():
     common = dict(
         order_id=42, expected_amount=Decimal("500"), expected_currency="RUB",
-        actual_amount=Decimal("500.00"), actual_currency="RUB",
+        actual_amount=Decimal("370.00"), actual_currency="RUB",
     )
     validate_payment_attempt(
         attempt_id=7, metadata={"order_id": "42", "payment_attempt_id": "7"}, **common

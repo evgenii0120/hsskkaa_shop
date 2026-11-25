@@ -78,7 +78,6 @@ async def _refresh_known_payment(
     product: Product,
     user: User,
 ):
-    """Reconcile a known payment only after releasing checkout row locks."""
     await session.commit()
     try:
         remote = await yk.get_payment(payment_id)
@@ -145,8 +144,6 @@ async def prepare_checkout(
     if not yk.is_configured():
         return PAYMENT_ERROR, kb.back_to_catalog()
 
-    # Do not silently create another order while an older legacy order for the
-    # same item has an unverified paid status or an unresolved payment attempt.
     unresolved_legacy = (await session.execute(
         select(Order.id).where(
             Order.user_id == user.id,
@@ -169,7 +166,6 @@ async def prepare_checkout(
             kb.back_to_catalog(),
         )
 
-    # Telegram getMe is a network call; perform it before acquiring database locks.
     return_url = YOOKASSA_RETURN_URL
     if not return_url:
         return_url = f"https://t.me/{(await bot.me()).username}"
@@ -206,12 +202,10 @@ async def prepare_checkout(
         if result_text is not None:
             return result_text, markup
         if resolved:
-            # Remote payment is canceled; create a fresh attempt on a fresh transaction.
             return await prepare_checkout(session, user, product, bot)
         return PAYMENT_ERROR, kb.back_to_catalog()
 
     if active and active.status == "pending":
-        # A pending attempt without its provider ID is ambiguous; never replace it.
         await session.commit()
         return PAYMENT_ERROR, kb.back_to_catalog()
 
@@ -269,7 +263,6 @@ async def prepare_checkout(
     order_id = order.id
     redirect_text = _redirect(product, order, user)
 
-    # Commit the idempotency key and exact request body before any external call.
     await session.commit()
 
     try:

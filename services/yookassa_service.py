@@ -1,4 +1,3 @@
-"""Async adapter around the synchronous official YooKassa SDK."""
 import asyncio
 import logging
 from datetime import datetime
@@ -84,7 +83,6 @@ def payment_account_id(payment: Any) -> str | None:
 
 
 async def list_payments(created_from: datetime, created_to: datetime, limit: int = 100):
-    """Paginate YooKassa payments for recovery of lost create responses."""
     if not is_configured():
         raise RuntimeError("ЮKassa не настроена")
     base = {

@@ -1,4 +1,3 @@
-"""Transactional delivery queue and per-channel execution."""
 import asyncio
 import io
 import logging
@@ -50,7 +49,6 @@ def _retry_delay(attempt_number: int) -> timedelta:
 
 
 async def enqueue_delivery(session, order_id: int) -> None:
-    """Idempotently create exactly one current task per channel/order."""
     for channel in ("telegram", "email"):
         stmt = pg_insert(DeliveryTask).values(
             order_id=order_id, channel=channel, status="pending", attempts=0,
@@ -200,13 +198,13 @@ async def _send_channel(bot: Bot, claim: ClaimedTask) -> tuple[str, str | None, 
         )
         return "accepted", str(message.message_id), {"chat_id": data["telegram_id"]}
     if claim.channel == "email":
-        # Stable Message-ID is useful for tracing, but SMTP does not guarantee deduplication.
         message_id = f"<order-{claim.order_id}@hsskkaa.ru>"
         response = await send_email(
             email=data["email"], subject=f"Ваш заказ #{claim.order_id}: {data['title']}",
             text=(f"Здравствуйте, {data['fio']}!\n\nСпасибо за покупку «{data['title']}».\n"
                   f"Ваш PDF находится во вложении.\nКод экземпляра: {data['secret_code']}\n"
-                  + ("Фискальный чек по оплате направляется платёжным сервисом отдельным письмом.\n"
+                  + ("Фискальный чек по оплате направляется платёжным сервисом отдельным письмом.\n\n"
+                  + "Данное сообщение создано автоматически, отвечать на него не нужно."
                      if YOOKASSA_SEND_RECEIPT else "")),
             attachment=pdf, message_id=message_id, order_id=claim.order_id,
         )
@@ -227,7 +225,6 @@ async def _finish(claim: ClaimedTask, status: str, *, external_id: str | None = 
                 ).with_for_update()
             )).scalar_one_or_none()
             if task is None:
-                # A newer worker owns the task. Its lease recovery will close the started attempt.
                 return False
             attempt = await session.get(DeliveryAttempt, claim.attempt_id)
             if attempt is None or attempt.status != "started":
@@ -333,7 +330,6 @@ async def process_claim(bot: Bot, claim: ClaimedTask) -> None:
     except (TelegramForbiddenError, TelegramBadRequest) as exc:
         await _finish(claim, "failed_permanent", error=exc)
     except Exception as exc:
-        # A network/SMTP exception can happen after remote acceptance. Treat as unknown/at-least-once.
         logging.exception("Delivery attempt failed task=%s", claim.task_id)
         await _finish(claim, "unknown", error=exc)
     finally:
@@ -383,7 +379,6 @@ async def delivery_worker(bot: Bot, worker_id: str) -> None:
 
 
 async def deliver_order(order_id: int, bot: Bot) -> None:
-    """Compatibility helper: enqueue delivery; never sends outside the worker queue."""
     async with SessionMaker() as session:
         async with session.begin():
             await enqueue_delivery(session, order_id)
