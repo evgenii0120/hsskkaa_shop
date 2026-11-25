@@ -116,3 +116,9 @@ async def list_payment_receipts(payment_id: str):
             return receipts
         params = {**params, "cursor": page.next_cursor}
     raise RuntimeError("Не удалось получить полный список чеков ЮKassa")
+
+
+async def get_receipt(receipt_id: str):
+    if not is_configured():
+        raise RuntimeError("ЮKassa не настроена")
+    return await asyncio.to_thread(Receipt.find_one, receipt_id)

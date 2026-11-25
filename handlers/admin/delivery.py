@@ -1,4 +1,5 @@
 from html import escape
+from zoneinfo import ZoneInfo
 
 from aiogram import F
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -26,8 +27,13 @@ def _status(value: str) -> str:
 
 _RECEIPT_STATUS = {
     "waiting": "ожидает проверки", "pending": "в обработке", "registered": "зарегистрирован",
-    "canceled": "регистрация отменена", "not_found": "не найден",
-    "details_unavailable": "реквизиты пока недоступны", "api_error": "ошибка API", "test": "тестовый платёж",
+    "canceled": "регистрация отменена",
+    "not_found": "предыдущая проверка не получила чек из API",
+    "api_empty": "API вернул пустой список чеков",
+    "no_payment_receipt": "в ответе API нет чека прихода по этому платежу",
+    "no_payment_id": "нет ID платежа",
+    "unconfirmed": "API не подтвердил регистрацию",
+    "details_unavailable": "зарегистрирован, API не вернул полные реквизиты", "api_error": "ошибка API", "test": "тестовый платёж",
     "mismatch": "платёж не совпадает с заказом", "not_applicable": "чек отсутствует у отменённого платежа",
 }
 _RECEIPT_EMAIL_STATUS = {
@@ -116,8 +122,14 @@ async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> Non
         if receipt is not None:
             fiscal = _RECEIPT_STATUS.get(receipt.status, receipt.status)
             mail = _RECEIPT_EMAIL_STATUS.get(receipt.email_status, "нет отправки ботом")
-            provider = f" · API: {escape(receipt.registration_status)}" if receipt.registration_status else ""
-            lines.append(f"  Чек: {escape(fiscal)}{provider} · письмо: {mail}")
+            provider = escape(receipt.registration_status or "API не вернул")
+            lines.append(f"  Чек: {escape(fiscal)} · письмо: {mail}")
+            if receipt.checked_at:
+                checked = receipt.checked_at.astimezone(ZoneInfo("Europe/Moscow"))
+                lines.append(f"  receipt_registration: {provider} · проверено {checked:%d.%m %H:%M} МСК")
+            if receipt.next_check_at:
+                next_check = receipt.next_check_at.astimezone(ZoneInfo("Europe/Moscow"))
+                lines.append(f"  Следующая проверка: {next_check:%d.%m %H:%M} МСК")
             if receipt.email_error:
                 lines.append(f"  {escape(receipt.email_error)}")
         if p.payment_id:

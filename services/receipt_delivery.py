@@ -59,8 +59,11 @@ async def queue_receipt_email(attempt_id: int) -> str:
             return "В заказе нет подтверждённого адреса из данных покупки."
         await track_paid_attempt(session, attempt.id, auto_email=False)
         tracking = await session.get(PaymentReceipt, attempt.id, with_for_update=True)
-        if tracking.email_status in {"queued", "sending"}:
-            return "Запрос уже в очереди или выполняется."
+        if tracking.email_status == "sending":
+            return "Письмо уже отправляется."
+        if tracking.email_status == "queued":
+            tracking.next_check_at = _now()
+            return "Письмо уже в очереди. Внеплановая проверка чека поставлена в очередь."
         now = _now()
         tracking.email_status = "queued"
         tracking.email_requested_at = now
@@ -72,9 +75,7 @@ async def queue_receipt_email(attempt_id: int) -> str:
 def _fiscal_documents(receipts, payment_id: str) -> tuple[list[dict], set[str]]:
     documents = {}
     statuses = set()
-    for receipt in receipts:
-        if receipt.type != "payment" or getattr(receipt, "payment_id", None) not in (None, payment_id):
-            continue
+    for receipt in _payment_receipts(receipts, payment_id):
         statuses.add(receipt.status)
         if receipt.status != "succeeded":
             continue
@@ -90,6 +91,77 @@ def _fiscal_documents(receipts, payment_id: str) -> tuple[list[dict], set[str]]:
         documents[receipt_id] = {"id": receipt_id, **{key: str(value) for key, value in fiscal.items()}}
     return list(documents.values()), statuses
 
+
+
+def _payment_receipts(receipts, payment_id: str) -> list:
+    return [
+        receipt for receipt in receipts
+        if receipt.type == "payment" and getattr(receipt, "payment_id", None) in (None, payment_id)
+    ]
+
+
+async def _lookup_receipt(tracking: PaymentReceipt, attempt: PaymentAttempt, order: Order) -> list[dict]:
+    payment_id = attempt.payment_id
+    if not payment_id:
+        tracking.status = "no_payment_id"
+        return []
+
+    payment = await yk.get_payment(payment_id)
+    tracking.registration_status = getattr(payment, "receipt_registration", None)
+    remote_order = yk.payment_metadata(payment).get("order_id")
+    if str(payment.id) != payment_id or (remote_order is not None and str(remote_order) != str(order.id)):
+        tracking.status = "mismatch"
+        return []
+    if payment.test:
+        tracking.status = "test"
+        return []
+
+    receipts = await yk.list_payment_receipts(payment_id)
+    candidates = _payment_receipts(receipts, payment_id)
+    documents, statuses = _fiscal_documents(candidates, payment_id)
+    complete_ids = {document["id"] for document in documents}
+    for receipt in candidates:
+        if receipt.status == "succeeded" and receipt.id and str(receipt.id) not in complete_ids:
+            try:
+                detail = await asyncio.wait_for(yk.get_receipt(str(receipt.id)), timeout=10)
+            except Exception as exc:
+                logger.warning(
+                    "Receipt details failed attempt=%s receipt_id=%s error_type=%s",
+                    attempt.id, receipt.id, type(exc).__name__,
+                )
+                continue
+            if str(detail.id) != str(receipt.id):
+                continue
+            recovered, detail_statuses = _fiscal_documents([detail], payment_id)
+            documents.extend(recovered)
+            complete_ids.update(document["id"] for document in recovered)
+            statuses.update(detail_statuses)
+
+    tracking.fiscal_documents = documents
+    if documents:
+        tracking.status = "registered"
+    elif "succeeded" in statuses or tracking.registration_status == "succeeded":
+        tracking.status = "details_unavailable"
+    elif "pending" in statuses or tracking.registration_status == "pending":
+        tracking.status = "pending"
+    elif "canceled" in statuses or tracking.registration_status == "canceled":
+        tracking.status = "canceled"
+    elif payment.status == "canceled":
+        tracking.status = "not_applicable"
+    elif not receipts:
+        tracking.status = "api_empty"
+    elif not candidates:
+        tracking.status = "no_payment_receipt"
+    else:
+        tracking.status = "unconfirmed"
+
+    logger.info(
+        "Receipt lookup attempt=%s payment_id=%s payment_status=%s receipt_registration=%s "
+        "api_receipts=%s matching_payment_receipts=%s fiscal_documents=%s result=%s",
+        attempt.id, payment_id, payment.status, tracking.registration_status,
+        len(receipts), len(candidates), len(documents), tracking.status,
+    )
+    return documents
 
 def _email_text(order_id: int, documents: list[dict]) -> str:
     lines = [f"Фискальные реквизиты чека прихода по заказу №{order_id}, полученные из ЮKassa.", ""]
@@ -160,46 +232,23 @@ async def _check_one() -> bool:
         requested = tracking.email_status == "queued"
         since = tracking.email_requested_at if requested else attempt.paid_at
         deadline = (since or attempt.created_at) + CHECK_WINDOW
-        documents = []
-        statuses = set()
         try:
-            if not payment_id:
-                tracking.status = "not_found"
-            else:
-                payment = await asyncio.wait_for(yk.get_payment(payment_id), timeout=20)
-                tracking.registration_status = getattr(payment, "receipt_registration", None)
-                remote_order = yk.payment_metadata(payment).get("order_id")
-                if str(payment.id) != payment_id or (
-                    remote_order is not None and str(remote_order) != str(order.id)
-                ):
-                    tracking.status = "mismatch"
-                elif payment.test:
-                    tracking.status = "test"
-                else:
-                    receipts = await asyncio.wait_for(yk.list_payment_receipts(payment_id), timeout=30)
-                    documents, statuses = _fiscal_documents(receipts, payment_id)
-                    tracking.fiscal_documents = documents
-                    if documents:
-                        tracking.status = "registered"
-                    elif "pending" in statuses or tracking.registration_status == "pending":
-                        tracking.status = "pending"
-                    elif "canceled" in statuses or tracking.registration_status == "canceled":
-                        tracking.status = "canceled"
-                    elif "succeeded" in statuses or tracking.registration_status == "succeeded":
-                        tracking.status = "details_unavailable"
-                    elif payment.status == "canceled":
-                        tracking.status = "not_applicable"
-                    else:
-                        tracking.status = "not_found"
+            documents = await asyncio.wait_for(_lookup_receipt(tracking, attempt, order), timeout=50)
         except Exception as exc:
-            logger.warning("Could not look up receipt for attempt %s (%s)", attempt.id, type(exc).__name__)
+            logger.warning(
+                "Receipt lookup failed attempt=%s payment_id=%s error_type=%s",
+                attempt.id, payment_id, type(exc).__name__,
+            )
             tracking.status = "api_error"
-        retryable = tracking.status in {"pending", "not_found", "details_unavailable", "api_error"}
+            documents = []
+        retryable = tracking.status in {
+            "pending", "api_empty", "no_payment_receipt", "unconfirmed", "details_unavailable", "api_error",
+        }
         if payment_id and retryable and now < deadline:
             tracking.next_check_at = now + CHECK_INTERVAL
         elif requested:
             if not documents:
-                _record_failure(tracking, attempt.id, f"Нет зарегистрированного чека с реквизитами ({tracking.status}).")
+                _record_failure(tracking, attempt.id, "Проверка завершена. Бот не получил реквизиты для отправки.")
             else:
                 email = _receipt_email(attempt, order)
                 if email is None:
