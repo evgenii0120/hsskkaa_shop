@@ -164,7 +164,6 @@ async def _watch_python_files() -> None:
                 "Перезапуск через 1 секунду..."
             )
 
-            # Даём редактору закончить сохранение файла.
             await asyncio.sleep(1)
 
             logger.info("Выполняется автоматический перезапуск бота...")
@@ -209,5 +208,6 @@ async def main() -> None:
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+        print ('Бот запущен')
     except KeyboardInterrupt:
         logging.info("Бот остановлен пользователем.")

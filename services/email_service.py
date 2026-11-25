@@ -1,4 +1,3 @@
-"""SMTP email delivery with stage-specific diagnostics and safe error reporting."""
 from __future__ import annotations
 
 import logging
@@ -22,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 class SMTPDeliveryError(RuntimeError):
-    """An SMTP failure annotated with the phase and delivery certainty."""
 
     def __init__(
         self,
@@ -39,7 +37,6 @@ class SMTPDeliveryError(RuntimeError):
 
 
 def smtp_config_error() -> str | None:
-    """Return a safe configuration error; never include credential values."""
     if not all((SMTP_HOST, SMTP_USER, SMTP_PASSWORD, SMTP_FROM)):
         return "Не заданы SMTP_HOST, SMTP_USER, SMTP_PASSWORD или SMTP_FROM"
     if SMTP_USE_TLS and SMTP_START_TLS:
@@ -60,7 +57,6 @@ def is_configured() -> bool:
 
 
 def _safe_error(exc: Exception) -> str:
-    """Redact credentials defensively before persisting an exception message."""
     value = str(exc)
     if SMTP_PASSWORD:
         value = value.replace(SMTP_PASSWORD, "[REDACTED]")
@@ -68,13 +64,11 @@ def _safe_error(exc: Exception) -> str:
 
 
 def _refused_recipients(result: object) -> list[str]:
-    """aiosmtplib returns a mapping for recipients refused by RCPT TO."""
     if not isinstance(result, dict):
         return []
     refused: list[str] = []
     for address, response in result.items():
         code = getattr(response, "code", None)
-        # Do not log full recipient addresses or server response bodies.
         refused.append(f"recipient refused (SMTP code {code or 'unknown'})")
     return refused
 
