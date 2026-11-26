@@ -42,6 +42,10 @@ def _legacy_columns(conn) -> None:
         columns = {c["name"] for c in inspector.get_columns("payment_attempts")}
         if "request_payload" not in columns:
             conn.execute(text("ALTER TABLE payment_attempts ADD COLUMN request_payload JSON"))
+    if "manual_receipts" in tables:
+        conn.execute(text("ALTER TABLE manual_receipts ADD COLUMN IF NOT EXISTS combined BOOLEAN NOT NULL DEFAULT FALSE"))
+        conn.execute(text("ALTER TABLE manual_receipts ADD COLUMN IF NOT EXISTS buyer_notified BOOLEAN NOT NULL DEFAULT FALSE"))
+
     if "delivery_tasks" in tables:
         columns = {c["name"] for c in inspector.get_columns("delivery_tasks")}
         if "lease_token" not in columns:
@@ -214,14 +218,14 @@ def _delivery_history_guard(conn) -> None:
 async def migrate() -> None:
     from db import models  # noqa: F401
     if engine.dialect.name != "postgresql":
-        raise RuntimeError("Для миграции нужна база PostgreSQL")
+        raise RuntimeError("This migration requires PostgreSQL")
     async with engine.begin() as conn:
         await conn.execute(text("SELECT pg_advisory_xact_lock(:a, :b)"), {"a": LOCK_KEY_1, "b": LOCK_KEY_2})
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_legacy_columns)
         await conn.run_sync(_legacy_data)
         await conn.run_sync(_delivery_history_guard)
-    print("Миграция PostgreSQL завершена.")
+    print("PostgreSQL migration completed successfully.")
 
 
 if __name__ == "__main__":

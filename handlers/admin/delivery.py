@@ -5,10 +5,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import DeliveryAttempt, DeliveryTask, Order, PaymentAttempt, Product, User
+from db.models import DeliveryAttempt, DeliveryTask, ManualReceipt, Order, PaymentAttempt, Product, User
 from config import DEBUG_ADMIN_IDS
 from handlers.common import edit_or_answer
 from services.delivery import force_retry_task
+from services.manual_receipts import STATUS_LABELS
 
 router = Router()
 router.callback_query.filter(F.from_user.id.in_(DEBUG_ADMIN_IDS))
@@ -53,6 +54,10 @@ async def delivery_dashboard(cb: CallbackQuery, session: AsyncSession) -> None:
         ).group_by(DeliveryTask.order_id)
     )).all())
 
+    combined_sent = set((await session.scalars(
+        select(PaymentAttempt.order_id).join(ManualReceipt, ManualReceipt.attempt_id == PaymentAttempt.id)
+        .where(PaymentAttempt.order_id.in_(orders), ManualReceipt.combined, ManualReceipt.status == "sent")
+    )).all())
     lines = ["<b>💳 Платежи и доставка</b>", f"Страница {page + 1} из {pages}", ""]
     rows = []
     if not orders:
@@ -61,7 +66,7 @@ async def delivery_dashboard(cb: CallbackQuery, session: AsyncSession) -> None:
         count, paid = payments.get(order_id, (0, False))
         lines.append(
             f"Заказ <b>#{order_id}</b> · {'оплачен' if paid else 'не подтверждён'} · "
-            f"доставлено {delivered.get(order_id, 0)}/2 · попыток оплаты {count}"
+            f"доставлено {min(2, delivered.get(order_id, 0) + (order_id in combined_sent))}/2 · попыток оплаты {count}"
         )
         rows.append([InlineKeyboardButton(
             text=f"Заказ #{order_id} — подробности", callback_data=f"god:dl:{page}:{order_id}"
@@ -107,6 +112,11 @@ async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> Non
         "", "<b>Попытки оплаты:</b>",
     ]
     rows = []
+    receipt_statuses = dict((await session.execute(
+        select(ManualReceipt.attempt_id, ManualReceipt.status).where(
+            ManualReceipt.attempt_id.in_([payment.id for payment in payments])
+        )
+    )).all())
     for p in payments:
         lines.append(
             f"#{p.id}: {_status(p.status)} · {p.amount} {p.currency} · "
@@ -114,6 +124,11 @@ async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> Non
         )
         if p.last_error:
             lines.append(f"  Ошибка: {escape(p.last_error[:250])}")
+        if p.id in receipt_statuses:
+            lines.append(f"  Чек и отправка: {STATUS_LABELS[receipt_statuses[p.id]]}")
+            rows.append([InlineKeyboardButton(
+                text=f"Чек по платежу #{p.id}", callback_data=f"receipts:open:{p.id}",
+            )])
     lines.append("\n<b>Каналы доставки:</b>")
     for task in tasks:
         lines.append(f"{task.channel}: <b>{_status(task.status)}</b> · попыток {task.attempts}")

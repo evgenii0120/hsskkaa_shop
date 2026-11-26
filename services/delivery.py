@@ -48,8 +48,8 @@ def _retry_delay(attempt_number: int) -> timedelta:
     return delivery_retry_delay(attempt_number, DELIVERY_MAX_BACKOFF_HOURS)
 
 
-async def enqueue_delivery(session, order_id: int) -> None:
-    for channel in ("telegram", "email"):
+async def enqueue_delivery(session, order_id: int, *, channels=("telegram", "email")) -> None:
+    for channel in channels:
         stmt = pg_insert(DeliveryTask).values(
             order_id=order_id, channel=channel, status="pending", attempts=0,
             next_retry_at=_now(), created_at=_now(), updated_at=_now(),
@@ -115,7 +115,7 @@ async def claim_next_task(worker_id: str) -> ClaimedTask | None:
                                task.attempts, token)
 
 
-async def _load_delivery_data(order_id: int):
+async def load_delivery_data(order_id: int):
     async with SessionMaker() as session:
         order = await session.get(Order, order_id)
         if not order:
@@ -152,7 +152,7 @@ async def _load_delivery_data(order_id: int):
         }
 
 
-async def _build_pdf(bot: Bot, data: dict) -> bytes:
+async def build_delivery_pdf(bot: Bot, data: dict) -> bytes:
     try:
         tg_file = await bot.get_file(data["file_id"])
         if not tg_file.file_path:
@@ -182,14 +182,14 @@ async def _build_pdf(bot: Bot, data: dict) -> bytes:
 
 
 async def _send_channel(bot: Bot, claim: ClaimedTask) -> tuple[str, str | None, dict | None]:
-    data = await _load_delivery_data(claim.order_id)
+    data = await load_delivery_data(claim.order_id)
     if claim.channel == "email" and not data["email"]:
         return "skipped", None, {"reason": "Email не указан; канал необязательный"}
     if claim.channel == "email":
         config_error = smtp_config_error()
         if config_error:
-            raise PermanentDeliveryError(f"Ошибка настройки почты: {config_error}")
-    pdf = await _build_pdf(bot, data)
+            raise PermanentDeliveryError(f"SMTP configuration error: {config_error}")
+    pdf = await build_delivery_pdf(bot, data)
     if claim.channel == "telegram":
         message = await bot.send_document(
             chat_id=data["telegram_id"],

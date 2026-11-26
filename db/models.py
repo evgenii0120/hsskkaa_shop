@@ -107,6 +107,8 @@ class ManualReceipt(Base):
     attempt_id: Mapped[int] = mapped_column(
         ForeignKey("payment_attempts.id", ondelete="RESTRICT"), primary_key=True
     )
+    combined: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    buyer_notified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str | None] = mapped_column(String(255))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

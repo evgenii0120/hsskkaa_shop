@@ -82,11 +82,14 @@ async def send_email(
     message_id: str,
     order_id: int,
     filename: str | None = None,
+    additional_pdf: tuple[str, bytes] | None = None,
 ) -> str:
     config_error = smtp_config_error()
     if config_error:
         raise SMTPDeliveryError("configuration", config_error, permanent=True)
-    if not attachment or not attachment.startswith(b"%PDF-"):
+    if not attachment or not attachment.startswith(b"%PDF-") or (
+        additional_pdf is not None and not additional_pdf[1].startswith(b"%PDF-")
+    ):
         raise SMTPDeliveryError(
             "message", "Вложение отсутствует или не похоже на PDF", permanent=True
         )
@@ -98,6 +101,9 @@ async def send_email(
         subtype="pdf",
         filename=filename or f"order_{order_id}.pdf",
     )
+    if additional_pdf is not None:
+        name, contents = additional_pdf
+        message.add_attachment(contents, maintype="application", subtype="pdf", filename=name)
     return await _send_message(message, order_id)
 
 

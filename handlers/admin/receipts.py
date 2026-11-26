@@ -178,8 +178,10 @@ async def _show_receipt(cb: CallbackQuery, session: AsyncSession, attempt_id: in
         lines.extend(("", "В «Моём налоге» откройте «Новая продажа» и внесите данные выше. "
                       "Для покупки от частного лица выберите «Физическому лицу». "
                       "Если чек уже есть, скачайте его PDF."))
-    if receipt.status == "queued":
-        lines.extend(("", "При обычной доставке письмо с чеком отправится после методички."))
+    if receipt.status in {"ready", "queued"} and receipt.combined:
+        lines.extend(("", "Методичка и чек уйдут одним письмом."))
+    elif receipt.status == "queued":
+        lines.extend(("", "Бот отправит чек отдельным письмом."))
     if receipt.sent_at:
         sent = receipt.sent_at.astimezone(MOSCOW)
         lines.append(f"Письмо принято: {sent:%d.%m.%Y в %H:%M} МСК")
@@ -188,6 +190,8 @@ async def _show_receipt(cb: CallbackQuery, session: AsyncSession, attempt_id: in
     rows = []
     if receipt.status == "waiting" and receipt.email:
         rows.append([_button("Загрузить PDF чека", f"receipts:upload:{attempt_id}")])
+    elif receipt.status == "ready":
+        rows.append([_button("Отправить методичку и чек", f"receipts:send:{attempt_id}")])
     elif receipt.status in {"failed", "unknown"}:
         rows.append([_button("Повторить отправку", f"receipts:retry-confirm:{attempt_id}")])
     rows.append([_button("Обновить", f"receipts:open:{attempt_id}"),
@@ -214,7 +218,7 @@ async def upload_prompt(cb: CallbackQuery, state: FSMContext, session: AsyncSess
     await state.set_data({"attempt_id": attempt_id})
     await edit_or_answer(cb,
         f"Пришлите PDF чека по заказу №{attempt.order_id} на сумму {attempt.amount:g} ₽.\n"
-        f"После загрузки бот отправит файл на {escape(receipt.email)}.",
+        f"Почта покупателя: {escape(receipt.email)}.",
         _keyboard([[_button("Отменить загрузку", f"receipts:open:{attempt_id}")]]),
     )
     await cb.answer()
@@ -251,7 +255,7 @@ async def upload_receipt(message: Message, state: FSMContext) -> None:
         await message.answer("Не удалось скачать PDF из Telegram. Попробуйте отправить его ещё раз.")
         return
     try:
-        await store_receipt_pdf(attempt_id, pdf.getvalue(), message.from_user.id)
+        needs_confirmation = await store_receipt_pdf(attempt_id, pdf.getvalue(), message.from_user.id)
     except ValueError as exc:
         await message.answer(escape(str(exc)))
         return
@@ -260,10 +264,15 @@ async def upload_receipt(message: Message, state: FSMContext) -> None:
         await message.answer("Не удалось сохранить чек. Проверьте статус платежа в очереди.")
         return
     await state.clear()
-    await message.answer(
-        "Чек сохранён. Бот отправит его отдельным письмом.",
-        reply_markup=_keyboard([[_button("Проверить отправку", f"receipts:open:{attempt_id}")]]),
-    )
+    if needs_confirmation:
+        await message.answer("Чек сохранён. Проверьте заказ и подтвердите отправку.",
+            reply_markup=_keyboard([
+                [_button("Отправить методичку и чек", f"receipts:send:{attempt_id}")],
+                [_button("Открыть заказ", f"receipts:open:{attempt_id}")],
+            ]))
+    else:
+        await message.answer("Чек сохранён и поставлен в очередь отправки.",
+            reply_markup=_keyboard([[_button("Проверить отправку", f"receipts:open:{attempt_id}")]]))
 
 
 @router.message(ReceiptUpload.pdf, ~F.text.startswith("/"))
@@ -285,7 +294,7 @@ async def confirm_retry(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
-@router.callback_query(F.data.regexp(r"^receipts:retry:[0-9]{1,10}$"))
+@router.callback_query(F.data.regexp(r"^receipts:(send|retry):[0-9]{1,10}$"))
 async def retry_receipt(cb: CallbackQuery, session: AsyncSession) -> None:
     attempt_id = _last_number(cb)
     try:
@@ -294,4 +303,4 @@ async def retry_receipt(cb: CallbackQuery, session: AsyncSession) -> None:
         await cb.answer(str(exc), show_alert=True)
         return
     await _show_receipt(cb, session, attempt_id)
-    await cb.answer("Чек поставлен в очередь.")
+    await cb.answer("Письмо поставлено в очередь.")

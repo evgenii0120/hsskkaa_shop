@@ -31,6 +31,13 @@ async def init_db() -> None:
             + ". Выполните миграцию командой: python -m db.migrate"
         )
     async with engine.connect() as conn:
+        columns = await conn.execute(text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'manual_receipts' "
+            "AND column_name IN ('combined', 'buyer_notified')"
+        ))
+        if len(columns.all()) != 2:
+            raise RuntimeError("Таблица чеков требует обновления. Выполните python -m db.migrate.")
         revision = await conn.execute(text(
             "SELECT 1 FROM shop_schema_migrations WHERE revision = '20261109_payment_delivery_v1'"
         ))

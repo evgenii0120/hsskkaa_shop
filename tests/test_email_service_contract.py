@@ -26,7 +26,7 @@ def test_email_error_stages_do_not_change_telegram_delivery_task():
     assert 'await _finish(claim, "failed_permanent", error=exc)' in source
     assert 'await _finish(claim, "unknown", error=exc)' in source
     assert 'await _finish(claim, "retryable", error=exc)' in source
-    assert 'for channel in ("telegram", "email")' in source
+    assert 'channels=("telegram", "email")' in source
 
 
 def test_admin_retry_is_per_delivery_task_not_whole_order():

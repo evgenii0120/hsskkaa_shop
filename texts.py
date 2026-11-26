@@ -145,12 +145,39 @@ def consent(p: Product, fio: str, email: str, agreed: bool) -> str:
     return head + order + tail
 
 
+DELIVERY_BEFORE_PAYMENT = (
+    "После оплаты подготовим твою методичку и отправим её на указанную почту. "
+    "Обычно справляемся быстрее, но на отправку может уйти до 24 часов."
+)
+
+
+def payment_confirmed(order_id: int) -> str:
+    return (
+        f"✅ Оплата заказа №{order_id} прошла. Готовим методичку!\n\n"
+        "Пришлём её на почту вместе с чеком. Обычно отправляем раньше, "
+        "но не позднее чем через 24 часа после оплаты."
+    )
+
+
+def payment_already_confirmed(order_id: int) -> str:
+    return f"✅ Заказ №{order_id} уже оплачен. Повторять оплату не нужно."
+
+
+def combined_order_email(order_id: int) -> str:
+    return (
+        f"Здравствуйте! Во вложении методичка и чек по заказу №{order_id}. "
+        "Спасибо за покупку!\n\n"
+        "Данное сообщение создано автоматически, отвечать на него не нужно."
+    )
+
+
 def redirect(p: Product, fio: str, email: str, order_id: int) -> str:
     return (
         "⏳ <b>Перенаправление на ЮKassa...</b>\n"
         f"{LINE}\n"
         f"Заказ №{order_id}\n\n"
-        f"{_order_block(p, fio, email)}"
+        f"{_order_block(p, fio, email)}\n\n"
+        f"{DELIVERY_BEFORE_PAYMENT}"
     )
 
 REGISTRATION = (

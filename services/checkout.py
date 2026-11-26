@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import keyboards as kb
 import texts
 from config import YOOKASSA_IDEMPOTENCY_SAFE_HOURS, YOOKASSA_RETURN_URL
-from db.models import Order, PaymentAttempt, Product, User
+from db.models import ManualReceipt, Order, PaymentAttempt, Product, User
 from services import yookassa_service as yk
 from services.payment_rules import can_retry_idempotent_create, validate_payment_attempt
 
@@ -69,6 +69,13 @@ async def _locked_pending_order(session: AsyncSession, user: User, product: Prod
     return order
 
 
+async def _confirmed_text(session: AsyncSession, order_id: int, attempt_id: int) -> str:
+    receipt = await session.get(ManualReceipt, attempt_id)
+    if receipt and receipt.combined and receipt.status != "sent":
+        return texts.payment_confirmed(order_id)
+    return texts.payment_already_confirmed(order_id)
+
+
 async def _refresh_known_payment(
     session: AsyncSession,
     bot: Bot,
@@ -89,8 +96,7 @@ async def _refresh_known_payment(
 
     if remote.status == "succeeded" and bool(remote.paid):
         return (
-            f"✅ Оплата заказа №{order_id} уже подтверждена.\n"
-            "Система проверяет доставку. Повторный платёж создавать не нужно.",
+            await _confirmed_text(session, order_id, attempt_id),
             kb.back_to_catalog(),
             True,
         )
@@ -119,7 +125,7 @@ async def _refresh_known_payment(
                 return PAYMENT_ERROR, kb.back_to_catalog(), False
             if attempt.status == "succeeded":
                 return (
-                    f"✅ Оплата заказа №{order_id} уже подтверждена.\nСистема проверяет доставку.",
+                    await _confirmed_text(session, order_id, attempt_id),
                     kb.back_to_catalog(), True,
                 )
             attempt.payment_id = payment_id
@@ -175,12 +181,11 @@ async def prepare_checkout(
         select(PaymentAttempt).where(PaymentAttempt.order_id == order.id)
         .order_by(PaymentAttempt.id.desc()).with_for_update()
     )).scalars().all()
-    if any(a.status == "succeeded" for a in attempts):
+    confirmed = next((attempt for attempt in attempts if attempt.status == "succeeded"), None)
+    if confirmed:
+        answer = await _confirmed_text(session, order.id, confirmed.id)
         await session.commit()
-        return (
-            f"✅ Оплата заказа №{order.id} уже подтверждена. Повторный платёж не требуется.",
-            kb.back_to_catalog(),
-        )
+        return answer, kb.back_to_catalog()
 
     active = next(
         (a for a in attempts if a.status in {"creating", "creation_unknown", "pending"}),

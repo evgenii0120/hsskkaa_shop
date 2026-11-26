@@ -11,7 +11,6 @@ from config import (ADMIN_IDS, DEBUG_ADMIN_IDS, WEBHOOK_CHECK_IP, WEBHOOK_HOST,
                     WEBHOOK_PATH, WEBHOOK_PORT, WEBHOOK_TRUST_PROXY, YOOKASSA_SHOP_ID)
 from db.base import SessionMaker
 from db.models import Order, PaymentAttempt
-from services.delivery import enqueue_delivery
 from services import yookassa_service as yk
 from services.payment_rules import validate_payment_attempt
 from services.manual_receipts import enqueue_receipt
@@ -113,11 +112,12 @@ async def _apply_payment(bot: Bot, payment) -> None:
                 if attempt.paid_at is None:
                     attempt.paid_at = datetime.now(timezone.utc)
                 if first_confirmation and not payment.test:
-                    await enqueue_receipt(session, attempt, order, payment, notify=True)
+                    await enqueue_receipt(
+                        session, attempt, order, payment, notify=True, combined=not previous_success,
+                    )
                 attempt.last_checked_at = datetime.now(timezone.utc)
                 attempt.last_error = None
                 order.status = "succeeded"
-                await enqueue_delivery(session, order.id)
                 if previous_success:
                     attempt.last_error = "POSSIBLE_OVERPAYMENT: another payment attempt for this order is already succeeded"
                     notification = (
