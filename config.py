@@ -56,11 +56,6 @@ def _bool(name: str, default: str) -> bool:
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
 YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "").strip()
-YOOKASSA_SEND_RECEIPT = _bool("YOOKASSA_SEND_RECEIPT", "true")
-RECEIPT_EMAIL_COPY = _bool("RECEIPT_EMAIL_COPY", "true")
-YOOKASSA_VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))
-_tax = os.getenv("YOOKASSA_TAX_SYSTEM_CODE", "").strip()
-YOOKASSA_TAX_SYSTEM_CODE = int(_tax) if _tax.isdigit() else None
 YOOKASSA_IDEMPOTENCY_SAFE_HOURS = min(23, max(1, int(os.getenv("YOOKASSA_IDEMPOTENCY_SAFE_HOURS", "23"))))
 PDF_FONT_PATH = os.getenv("PDF_FONT_PATH", "").strip()
 

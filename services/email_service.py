@@ -81,6 +81,7 @@ async def send_email(
     attachment: bytes,
     message_id: str,
     order_id: int,
+    filename: str | None = None,
 ) -> str:
     config_error = smtp_config_error()
     if config_error:
@@ -95,7 +96,7 @@ async def send_email(
         attachment,
         maintype="application",
         subtype="pdf",
-        filename=f"order_{order_id}.pdf",
+        filename=filename or f"order_{order_id}.pdf",
     )
     return await _send_message(message, order_id)
 
@@ -110,16 +111,6 @@ def _message(email: str, subject: str, text: str, message_id: str, order_id: int
     message["X-Order-ID"] = str(order_id)
     message.set_content(text)
     return message
-
-
-async def send_receipt_email(
-    *, email: str, text: str, message_id: str, order_id: int,
-) -> str:
-    config_error = smtp_config_error()
-    if config_error:
-        raise SMTPDeliveryError("configuration", config_error, permanent=True)
-    message = _message(email, f"Реквизиты кассового чека по заказу №{order_id}", text, message_id, order_id)
-    return await _send_message(message, order_id)
 
 
 async def _send_message(message: EmailMessage, order_id: int) -> str:

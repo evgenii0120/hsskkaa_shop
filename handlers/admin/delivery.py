@@ -1,18 +1,18 @@
 from html import escape
-from zoneinfo import ZoneInfo
 
-from aiogram import F
+from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import DeliveryAttempt, DeliveryTask, Order, PaymentAttempt, PaymentReceipt, Product, User
-from handlers.admin.common import admin_router
+from db.models import DeliveryAttempt, DeliveryTask, Order, PaymentAttempt, Product, User
+from config import DEBUG_ADMIN_IDS
 from handlers.common import edit_or_answer
 from services.delivery import force_retry_task
-from services.receipt_delivery import queue_receipt_email
 
-router = admin_router()
+router = Router()
+router.callback_query.filter(F.from_user.id.in_(DEBUG_ADMIN_IDS))
+PAGE_SIZE = 15
 
 
 def _status(value: str) -> str:
@@ -25,63 +25,65 @@ def _status(value: str) -> str:
     }.get(value, value)
 
 
-_RECEIPT_STATUS = {
-    "waiting": "ожидает проверки", "pending": "в обработке", "registered": "зарегистрирован",
-    "canceled": "регистрация отменена",
-    "not_found": "предыдущая проверка не получила чек из API",
-    "api_empty": "API вернул пустой список чеков",
-    "no_payment_receipt": "в ответе API нет чека прихода по этому платежу",
-    "no_payment_id": "нет ID платежа",
-    "unconfirmed": "API не подтвердил регистрацию",
-    "details_unavailable": "зарегистрирован, API не вернул полные реквизиты", "api_error": "ошибка API", "test": "тестовый платёж",
-    "mismatch": "платёж не совпадает с заказом", "not_applicable": "чек отсутствует у отменённого платежа",
-}
-_RECEIPT_EMAIL_STATUS = {
-    "queued": "в очереди", "sending": "отправляется", "accepted": "принято SMTP",
-    "blocked": "отправка недоступна", "failed": "ошибка отправки", "unknown": "результат неизвестен",
-}
+@router.callback_query(
+    F.data.in_({"adm:delivery", "god:delivery"}) | F.data.regexp(r"^god:delivery:[0-9]{1,10}$")
+)
+async def delivery_dashboard(cb: CallbackQuery, session: AsyncSession) -> None:
+    requested_page = int(cb.data.rsplit(":", 1)[-1]) if cb.data.count(":") == 2 else 0
+    total = await session.scalar(select(func.count()).select_from(Order))
+    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(requested_page, pages - 1)
+    orders = (await session.scalars(
+        select(Order.id).order_by(Order.created_at.desc(), Order.id.desc())
+        .offset(page * PAGE_SIZE).limit(PAGE_SIZE)
+    )).all()
 
+    payments = {
+        order_id: (count, paid)
+        for order_id, count, paid in (await session.execute(
+            select(
+                PaymentAttempt.order_id, func.count(),
+                func.max(case((PaymentAttempt.status == "succeeded", 1), else_=0)),
+            ).where(PaymentAttempt.order_id.in_(orders)).group_by(PaymentAttempt.order_id)
+        )).all()
+    }
+    delivered = dict((await session.execute(
+        select(DeliveryTask.order_id, func.count()).where(
+            DeliveryTask.order_id.in_(orders), DeliveryTask.status == "delivered",
+        ).group_by(DeliveryTask.order_id)
+    )).all())
 
-async def _dashboard(cb: CallbackQuery, session: AsyncSession) -> None:
-    orders = (await session.execute(
-        select(Order).order_by(Order.id.desc()).limit(15)
-    )).scalars().all()
-    lines = ["<b>💳 Платежи и доставка</b>", "Последние 15 заказов:", ""]
+    lines = ["<b>💳 Платежи и доставка</b>", f"Страница {page + 1} из {pages}", ""]
     rows = []
-    for order in orders:
-        payments = (await session.execute(
-            select(PaymentAttempt).where(PaymentAttempt.order_id == order.id)
-            .order_by(PaymentAttempt.id.desc())
-        )).scalars().all()
-        tasks = (await session.execute(
-            select(DeliveryTask).where(DeliveryTask.order_id == order.id)
-        )).scalars().all()
-        paid = any(p.status == "succeeded" for p in payments)
-        delivered = sum(t.status == "delivered" for t in tasks)
+    if not orders:
+        lines.append("Заказов пока нет.")
+    for order_id in orders:
+        count, paid = payments.get(order_id, (0, False))
         lines.append(
-            f"Заказ <b>#{order.id}</b> · {'оплачен' if paid else 'не подтверждён'} · "
-            f"доставлено {delivered}/2 · попыток оплаты {len(payments)}"
+            f"Заказ <b>#{order_id}</b> · {'оплачен' if paid else 'не подтверждён'} · "
+            f"доставлено {delivered.get(order_id, 0)}/2 · попыток оплаты {count}"
         )
         rows.append([InlineKeyboardButton(
-            text=f"Заказ #{order.id} — подробности", callback_data=f"adm:dl:{order.id}"
+            text=f"Заказ #{order_id} — подробности", callback_data=f"god:dl:{page}:{order_id}"
         )])
-    rows.append([InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="adm:panel")])
+
+    arrows = []
+    if page > 0:
+        arrows.append(InlineKeyboardButton(text="⬅️", callback_data=f"god:delivery:{page - 1}"))
+    if page + 1 < pages:
+        arrows.append(InlineKeyboardButton(text="➡️", callback_data=f"god:delivery:{page + 1}"))
+    if arrows:
+        rows.append(arrows)
+    rows.append([InlineKeyboardButton(text="⬅️ В меню /debug", callback_data="god:panel")])
     await edit_or_answer(cb, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows))
     await cb.answer()
 
 
-@router.callback_query(F.data.in_({"adm:delivery", "god:delivery"}))
-async def delivery_dashboard(cb: CallbackQuery, session: AsyncSession) -> None:
-    await _dashboard(cb, session)
-
-
-@router.callback_query(F.data.startswith("adm:dl:") | F.data.startswith("god:dl:"))
+@router.callback_query(F.data.regexp(r"^(adm:dl|god:dl):([0-9]{1,10}:)?[0-9]{1,10}$"))
 async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> None:
-    try:
-        order_id = int(cb.data.rsplit(":", 1)[1])
-    except ValueError:
-        await cb.answer("Некорректный ID", show_alert=True)
-        return
+    parts = cb.data.split(":")
+    order_id = int(parts[-1])
+    page = int(parts[-2]) if len(parts) == 4 else 0
     order = await session.get(Order, order_id)
     if not order:
         await cb.answer("Заказ не найден", show_alert=True)
@@ -105,12 +107,6 @@ async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> Non
         "", "<b>Попытки оплаты:</b>",
     ]
     rows = []
-    tracking = {
-        item.attempt_id: item
-        for item in (await session.scalars(select(PaymentReceipt).where(
-            PaymentReceipt.attempt_id.in_([p.id for p in payments])
-        ))).all()
-    }
     for p in payments:
         lines.append(
             f"#{p.id}: {_status(p.status)} · {p.amount} {p.currency} · "
@@ -118,24 +114,6 @@ async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> Non
         )
         if p.last_error:
             lines.append(f"  Ошибка: {escape(p.last_error[:250])}")
-        receipt = tracking.get(p.id)
-        if receipt is not None:
-            fiscal = _RECEIPT_STATUS.get(receipt.status, receipt.status)
-            mail = _RECEIPT_EMAIL_STATUS.get(receipt.email_status, "нет отправки ботом")
-            provider = escape(receipt.registration_status or "API не вернул")
-            lines.append(f"  Чек: {escape(fiscal)} · письмо: {mail}")
-            if receipt.checked_at:
-                checked = receipt.checked_at.astimezone(ZoneInfo("Europe/Moscow"))
-                lines.append(f"  receipt_registration: {provider} · проверено {checked:%d.%m %H:%M} МСК")
-            if receipt.next_check_at:
-                next_check = receipt.next_check_at.astimezone(ZoneInfo("Europe/Moscow"))
-                lines.append(f"  Следующая проверка: {next_check:%d.%m %H:%M} МСК")
-            if receipt.email_error:
-                lines.append(f"  {escape(receipt.email_error)}")
-        if p.payment_id:
-            rows.append([InlineKeyboardButton(
-                text=f"✉️ Повторить отправку чека · #{p.id}", callback_data=f"adm:receipt:{p.id}"
-            )])
     lines.append("\n<b>Каналы доставки:</b>")
     for task in tasks:
         lines.append(f"{task.channel}: <b>{_status(task.status)}</b> · попыток {task.attempts}")
@@ -153,54 +131,19 @@ async def delivery_order_detail(cb: CallbackQuery, session: AsyncSession) -> Non
             )
         if task.status in {"blocked", "retry_wait", "pending", "skipped"}:
             rows.append([InlineKeyboardButton(
-                text=f"🔁 Повторить {task.channel}", callback_data=f"adm:retry:{task.id}"
+                text=f"🔁 Повторить {task.channel}", callback_data=f"god:dl-retry:{task.id}"
             )])
-    rows.append([InlineKeyboardButton(text="Обновить", callback_data=f"adm:dl:{order_id}")])
-    rows.append([InlineKeyboardButton(text="⬅️ К списку заказов", callback_data="adm:delivery")])
+    rows.append([InlineKeyboardButton(text="Обновить", callback_data=f"god:dl:{page}:{order_id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ К списку заказов", callback_data=f"god:delivery:{page}")])
     await edit_or_answer(cb, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows))
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith("adm:retry:"))
+@router.callback_query(F.data.regexp(r"^(adm:retry|god:dl-retry):[0-9]{1,10}$"))
 async def retry_delivery(cb: CallbackQuery) -> None:
-    try:
-        task_id = int(cb.data.rsplit(":", 1)[1])
-    except ValueError:
-        await cb.answer("Некорректный ID", show_alert=True)
-        return
+    task_id = int(cb.data.rsplit(":", 1)[1])
     ok = await force_retry_task(task_id)
     await cb.answer(
         "Задание возвращено в очередь" if ok else "Повтор невозможен: проверьте оплату и статус задания",
         show_alert=True,
     )
-
-
-@router.callback_query(F.data.regexp(r"^adm:receipt:[0-9]+$"))
-async def confirm_receipt_resend(cb: CallbackQuery, session: AsyncSession) -> None:
-    attempt_id = int(cb.data.rsplit(":", 1)[1])
-    attempt = await session.get(PaymentAttempt, attempt_id)
-    if not attempt or not attempt.payment_id:
-        await cb.answer("У попытки нет ID платежа ЮKassa.", show_alert=True)
-        return
-    await edit_or_answer(
-        cb,
-        f"Отправить покупателю фискальные реквизиты чека по заказу #{attempt.order_id}, "
-        f"попытка оплаты #{attempt_id}? Бот сначала проверит чек в ЮKassa.",
-        InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Отправить", callback_data=f"adm:receipt-send:{attempt_id}")],
-            [InlineKeyboardButton(text="⬅️ К заказу", callback_data=f"adm:dl:{attempt.order_id}")],
-        ]),
-    )
-    await cb.answer()
-
-
-@router.callback_query(F.data.regexp(r"^adm:receipt-send:[0-9]+$"))
-async def resend_receipt(cb: CallbackQuery, session: AsyncSession) -> None:
-    attempt_id = int(cb.data.rsplit(":", 1)[1])
-    result = await queue_receipt_email(attempt_id)
-    attempt = await session.get(PaymentAttempt, attempt_id)
-    if attempt:
-        await edit_or_answer(cb, result, InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="⬅️ К заказу", callback_data=f"adm:dl:{attempt.order_id}")
-        ]]))
-    await cb.answer(result if not attempt else None, show_alert=not bool(attempt))

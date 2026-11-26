@@ -252,7 +252,6 @@ async def prepare_checkout(
             amount=attempt.amount,
             order_id=order.id,
             attempt_id=attempt.id,
-            email=order.customer_email or user.email,
             description=product.title,
             return_url=return_url,
         )

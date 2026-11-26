@@ -232,7 +232,8 @@ async def error_handler(event: ErrorEvent, bot: Bot) -> bool:
 
 
 @router.message(Command("debug"), ADMIN)
-async def open_panel(message: Message):
+async def open_panel(message: Message, state: FSMContext):
+    await state.clear()
     await message.answer(
         "🐞 <b>Функции разработчика</b>",
         reply_markup=kb.debug_menu(),
@@ -240,7 +241,8 @@ async def open_panel(message: Message):
 
 
 @router.callback_query(F.data == "god:panel", ADMIN)
-async def panel(callback: CallbackQuery):
+async def panel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     await edit_or_answer(
         callback,
         "🐞 <b>Функции разработчика</b>",
@@ -834,7 +836,7 @@ async def process_order_id(
             f"Для заказа #{order.id} откройте управление отдельными каналами доставки. "
             "Повтор доступен только при подтверждённой оплате.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Открыть платежи и доставку", callback_data=f"adm:dl:{order.id}")
+                InlineKeyboardButton(text="Открыть платежи и доставку", callback_data=f"god:dl:0:{order.id}")
             ]]),
         )
         await state.clear()

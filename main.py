@@ -2,55 +2,35 @@ import asyncio
 import logging
 import os
 import sys
+from contextlib import AsyncExitStack
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.types import BotCommand
 
 from config import BOT_TOKEN, DELIVERY_WORKER_COUNT
 from db.base import engine, init_db
 from handlers import admin, debug, fallback, menu, payment, profile, registration, support
-from handlers.admin import debug as god_debug
+from handlers.admin import debug as god_debug, receipts
 from middlewares.db import DbSessionMiddleware
 from services.debug import TelegramLogHandler
 from services.delivery import delivery_worker
 from services.document_monitor import monitor_documents
-from services.receipt_delivery import receipt_worker
-from services.yookassa_service import is_configured as yookassa_is_configured
+from services.manual_receipts import receipt_worker
 from webhook_server import start_payment_watcher, start_webhook_server
 
 
-async def _run_bot() -> None:
-    if not BOT_TOKEN:
-        raise RuntimeError("Але утырок, а токен бота кто писать будет?")
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=[
-            RotatingFileHandler("bot.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
-    )
-
-    await init_db()
-
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(
-            parse_mode=ParseMode.HTML,
-            link_preview_is_disabled=True,
-        ),
-    )
-    dp = Dispatcher(storage=MemoryStorage())
+def _create_dispatcher() -> Dispatcher:
+    dp = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
     dp.message.outer_middleware(DbSessionMiddleware())
     dp.callback_query.outer_middleware(DbSessionMiddleware())
     dp.include_routers(
         admin.router,
+        receipts.router,
         god_debug.router,
         debug.router,
         menu.router,
@@ -60,63 +40,68 @@ async def _run_bot() -> None:
         support.router,
         fallback.router,
     )
-    logging.getLogger().addHandler(TelegramLogHandler(bot))
+    return dp
 
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Запустить бота"),
-        BotCommand(command="menu", description="Главное меню"),
-    ])
 
-    await bot.delete_webhook(drop_pending_updates=False)
-    reload_task = asyncio.create_task(
-        _watch_python_files(),
-        name="code-reloader",
-    )
+async def _run_bot(dp: Dispatcher) -> None:
+    if not BOT_TOKEN:
+        raise RuntimeError("В .env не задан BOT_TOKEN.")
 
-    monitor_task = asyncio.create_task(
-        monitor_documents(bot),
-        name="document-monitor",
-    )
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(engine.dispose)
+        await init_db()
 
-    webhook_runner = await start_webhook_server(bot)
-    payment_task = start_payment_watcher(bot)
-    receipt_task = (asyncio.create_task(receipt_worker(), name="receipt-worker")
-                    if yookassa_is_configured() else None)
-    workers = [
-        asyncio.create_task(delivery_worker(bot, f"delivery-{i + 1}"), name=f"delivery-worker-{i + 1}")
-        for i in range(DELIVERY_WORKER_COUNT)
-    ]
-
-    try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-    finally:
-        for task in [
-            reload_task,
-            monitor_task,
-            payment_task,
-            receipt_task,
-            *workers,
-        ]:
-            if task:
-                task.cancel()
-        await asyncio.gather(
-            *(
-                task
-                for task in [
-                    reload_task,
-                    monitor_task,
-                    payment_task,
-                    receipt_task,
-                    *workers,
-                ]
-                if task
+        bot = Bot(
+            token=BOT_TOKEN,
+            default=DefaultBotProperties(
+                parse_mode=ParseMode.HTML,
+                link_preview_is_disabled=True,
             ),
-            return_exceptions=True,
         )
-        if webhook_runner:
-            await webhook_runner.cleanup()
-        await bot.session.close()
-        await engine.dispose()
+        resources.push_async_callback(bot.session.close)
+        root_logger = logging.getLogger()
+        telegram_handler = TelegramLogHandler(bot)
+        root_logger.addHandler(telegram_handler)
+        resources.callback(root_logger.removeHandler, telegram_handler)
+
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Запустить бота"),
+            BotCommand(command="menu", description="Главное меню"),
+        ])
+        await bot.delete_webhook(drop_pending_updates=False)
+
+        webhook_runner = await start_webhook_server(bot)
+        if webhook_runner is not None:
+            resources.push_async_callback(webhook_runner.cleanup)
+
+        tasks: list[asyncio.Task] = []
+        resources.push_async_callback(_stop_background_tasks, tasks)
+        tasks.append(asyncio.create_task(_watch_python_files(), name="code-reloader"))
+        tasks.append(asyncio.create_task(monitor_documents(bot), name="document-monitor"))
+        payment_task = start_payment_watcher(bot)
+        if payment_task is not None:
+            tasks.append(payment_task)
+        tasks.append(asyncio.create_task(
+            receipt_worker(bot, notifications=True), name="receipt-notifications",
+        ))
+        tasks.append(asyncio.create_task(
+            receipt_worker(bot, notifications=False), name="receipt-email",
+        ))
+        for index in range(1, DELIVERY_WORKER_COUNT + 1):
+            tasks.append(asyncio.create_task(
+                delivery_worker(bot, f"delivery-{index}"), name=f"delivery-worker-{index}",
+            ))
+
+        await dp.start_polling(
+            bot, allowed_updates=dp.resolve_used_update_types(), close_bot_session=False,
+        )
+
+
+async def _stop_background_tasks(tasks: list[asyncio.Task]) -> None:
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
 
 def _get_python_files_snapshot() -> dict:
     project_dir = Path(__file__).resolve().parent
@@ -180,14 +165,23 @@ async def _watch_python_files() -> None:
             )
 
 async def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            RotatingFileHandler("bot.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
+
+    dp = _create_dispatcher()
     restart_delay = 10
 
     while True:
         try:
             logging.info("Запуск Telegram-бота...")
-            await _run_bot()
+            await _run_bot(dp)
 
-            # Если polling неожиданно завершился без ошибки.
             logging.warning(
                 "Работа бота завершилась. "
                 "Повторный запуск через %s секунд.",

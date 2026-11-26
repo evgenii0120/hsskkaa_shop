@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     JSON, BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey,
-    Index, Integer, Numeric, String, Text, UniqueConstraint,
+    Index, Integer, LargeBinary, Numeric, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -97,23 +97,31 @@ class PaymentAttempt(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
-class PaymentReceipt(Base):
-    __tablename__ = "payment_receipts"
-    __table_args__ = (Index("ix_payment_receipts_next_check", "next_check_at"),)
+class ManualReceipt(Base):
+    __tablename__ = "manual_receipts"
+    __table_args__ = (
+        Index("ix_manual_receipts_mail", "status", "send_after"),
+        Index("ix_manual_receipts_notice", "notify_after"),
+    )
 
     attempt_id: Mapped[int] = mapped_column(
         ForeignKey("payment_attempts.id", ondelete="RESTRICT"), primary_key=True
     )
-    registration_status: Mapped[str | None] = mapped_column(String(32))
-    status: Mapped[str] = mapped_column(String(32), default="waiting", nullable=False)
-    fiscal_documents: Mapped[list[dict] | None] = mapped_column(JSON)
-    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    next_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    email_status: Mapped[str | None] = mapped_column(String(32))
-    email_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    email_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    email_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    email_error: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    pdf: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    pdf_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    uploaded_by: Mapped[int | None] = mapped_column(BigInteger)
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    send_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    send_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    send_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+    notify_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notified_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
 
 
 class DeliveryTask(Base):

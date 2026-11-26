@@ -14,7 +14,7 @@ from db.models import Order, PaymentAttempt
 from services.delivery import enqueue_delivery
 from services import yookassa_service as yk
 from services.payment_rules import validate_payment_attempt
-from services.receipt_delivery import track_paid_attempt
+from services.manual_receipts import enqueue_receipt
 
 YOOKASSA_NETWORKS = [ip_network(n) for n in (
     "185.71.76.0/27", "185.71.77.0/27", "77.75.153.0/25",
@@ -112,7 +112,8 @@ async def _apply_payment(bot: Bot, payment) -> None:
                 attempt.status = "succeeded"
                 if attempt.paid_at is None:
                     attempt.paid_at = datetime.now(timezone.utc)
-                await track_paid_attempt(session, attempt.id, auto_email=first_confirmation)
+                if first_confirmation and not payment.test:
+                    await enqueue_receipt(session, attempt, order, payment, notify=True)
                 attempt.last_checked_at = datetime.now(timezone.utc)
                 attempt.last_error = None
                 order.status = "succeeded"
@@ -291,6 +292,13 @@ async def start_webhook_server(bot: Bot) -> web.AppRunner | None:
     app.router.add_post(WEBHOOK_PATH, yookassa_webhook)
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, WEBHOOK_HOST, WEBHOOK_PORT).start()
+    try:
+        await web.TCPSite(runner, WEBHOOK_HOST, WEBHOOK_PORT).start()
+    except OSError as exc:
+        await runner.cleanup()
+        raise RuntimeError(
+            f"Не удалось запустить вебхук на {WEBHOOK_HOST}:{WEBHOOK_PORT}. "
+            "Проверьте, свободен ли порт и доступен ли адрес."
+        ) from exc
     logging.info("YooKassa webhook listening on %s:%s%s", WEBHOOK_HOST, WEBHOOK_PORT, WEBHOOK_PATH)
     return runner

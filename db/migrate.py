@@ -214,14 +214,14 @@ def _delivery_history_guard(conn) -> None:
 async def migrate() -> None:
     from db import models  # noqa: F401
     if engine.dialect.name != "postgresql":
-        raise RuntimeError("This migration requires PostgreSQL")
+        raise RuntimeError("Для миграции нужна база PostgreSQL")
     async with engine.begin() as conn:
         await conn.execute(text("SELECT pg_advisory_xact_lock(:a, :b)"), {"a": LOCK_KEY_1, "b": LOCK_KEY_2})
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_legacy_columns)
         await conn.run_sync(_legacy_data)
         await conn.run_sync(_delivery_history_guard)
-    print("PostgreSQL migration completed successfully.")
+    print("Миграция PostgreSQL завершена.")
 
 
 if __name__ == "__main__":

@@ -188,7 +188,7 @@ async def _send_channel(bot: Bot, claim: ClaimedTask) -> tuple[str, str | None, 
     if claim.channel == "email":
         config_error = smtp_config_error()
         if config_error:
-            raise PermanentDeliveryError(f"SMTP configuration error: {config_error}")
+            raise PermanentDeliveryError(f"Ошибка настройки почты: {config_error}")
     pdf = await _build_pdf(bot, data)
     if claim.channel == "telegram":
         message = await bot.send_document(

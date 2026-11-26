@@ -48,7 +48,6 @@ PANEL_TEXT = "👑 <b>Админ-панель</b>\n\nВыберите разде
 def panel_kb() -> Kb:
     return Kb(inline_keyboard=[
         [Btn(text="📊 Статистика", callback_data="adm:stats")],
-        [Btn(text="💳 Платежи и доставка", callback_data="adm:delivery")],
         [Btn(text="📦 Управление товарами", callback_data="adm:products")],
         [Btn(text="💬 Техподдержка (Тикеты)", callback_data="adm:tickets")],
         [Btn(text="⬅️ Выйти в главное меню", callback_data="menu")],

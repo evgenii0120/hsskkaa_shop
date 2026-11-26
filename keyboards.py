@@ -122,7 +122,11 @@ def debug_menu() -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text="💳 Платежи и доставка",
-            callback_data="god:delivery",
+            callback_data="god:delivery:0",
+        )],
+        [InlineKeyboardButton(
+            text="🧾 Требуют чеков",
+            callback_data="receipts:queue:0",
         )],
         [InlineKeyboardButton(
             text="🖥 Системные функции",
